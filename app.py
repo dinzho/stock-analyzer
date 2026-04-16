@@ -6,7 +6,6 @@ import math
 import time
 from functools import wraps
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # === 重試裝飾器 ===
 def retry_on_rate_limit(max_retries=3, delay=2):
@@ -79,22 +78,18 @@ def analyze_industry_structure(sector, industry, gross_margin, roe):
         "downstream": downstream_power
     }
 
-# === 圖表生成函數 (新增) ===
+# === 圖表生成函數 ===
 def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
     """生成 250 日 K 線圖 + FIB 回撤 + 買賣信號"""
-    
-    # 過濾掉最近可能數據不足的部分
     plot_df = df.tail(252) 
     if plot_df.empty: return None
     
-    # 準備數據
     x = plot_df.index
     open_ = plot_df['Open']
     high = plot_df['High']
     low = plot_df['Low']
     close = plot_df['Close']
     
-    # 創建 Figure
     fig = go.Figure()
 
     # 1. K 線
@@ -109,12 +104,9 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
     fig.add_trace(go.Scatter(x=x, y=sma200_data, line=dict(color='blue', width=1.5), name='SMA 200'))
 
     # 3. Fibonacci 水平線與色帶
-    # 計算範圍的 0% 和 100% 用於繪製色帶 (0 是低點，1 是高點，這里是下跌回撤，所以 0 是低點)
-    # 但 yfinance 的數據順序是時間序列，我們用價格高低點
     high_price = fib_levels.get('high_price', high.max())
     low_price = fib_levels.get('low_price', low.min())
     
-    # 繪製色帶 (FIB 區域)
     fib_keys = ['0.000', '0.236', '0.382', '0.500', '0.618', '0.786', '1.000']
     colors = ['rgba(0,255,0,0.1)', 'rgba(0,255,0,0.1)', 'rgba(255,255,0,0.1)', 'rgba(255,165,0,0.1)', 'rgba(255,0,0,0.1)', 'rgba(255,0,0,0.1)', 'rgba(255,0,0,0.1)']
     
@@ -128,8 +120,6 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
             type="rect", x0=x[0], x1=x[-1], y0=y0, y1=y1,
             fillcolor=colors[i], line=dict(width=0), layer='below'
         )
-        
-        # 添加文字標記
         fig.add_annotation(
             x=x[0], y=y0, text=f"Fib {key_curr}",
             showarrow=False, font=dict(size=10, color="gray"),
@@ -137,24 +127,16 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
         )
 
     # 4. 買賣信號 (Signal)
-    # 邏輯：價格上穿 SMA20 = 買入 (綠三角)，下穿 = 賣出 (紅三角)
-    buy_signals = []
-    sell_signals = []
-    buy_dates = []
-    sell_dates = []
-
+    buy_signals, sell_signals, buy_dates, sell_dates = [], [], [], []
     for i in range(1, len(close)):
         prev_close = close.iloc[i-1]
         curr_close = close.iloc[i]
         curr_sma20 = sma20_data.iloc[i]
-        # 確保 SMA 有值
         if pd.isna(curr_sma20): continue
 
-        # 買入：前一天在均線下，今天在上 (或者今天剛好在均線上且漲)
         if prev_close < sma20_data.iloc[i-1] and curr_close > curr_sma20:
             buy_signals.append(curr_close)
             buy_dates.append(x[i])
-        # 賣出：前一天在均線上，今天在下
         elif prev_close > sma20_data.iloc[i-1] and curr_close < curr_sma20:
             sell_signals.append(curr_close)
             sell_dates.append(x[i])
@@ -168,10 +150,8 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
                                  marker=dict(symbol='triangle-down', size=12, color='red'), 
                                  name='賣出信號'))
 
-    # 佈局設置
     fig.update_layout(
-        xaxis_rangeslider_visible=False,
-        height=600,
+        xaxis_rangeslider_visible=False, height=600,
         margin=dict(l=20, r=20, t=40, b=20),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         hovermode='x unified'
@@ -186,7 +166,6 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
 def fetch_stock_data(ticker):
     stock = yf.Ticker(ticker)
     try:
-        # 獲取 2 年數據以計算 SMA200
         df = stock.history(period="2y", interval="1d")
         if df.empty: return None, None, None, None, None, "無法獲取歷史數據"
     except Exception as e: return None, None, None, None, None, f"歷史數據獲取失敗：{e}"
@@ -219,7 +198,8 @@ def fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, 
     }
     current_date = datetime.datetime.now()
     
-    if news_
+    # ✅ 修正了這裡的語法錯誤
+    if news_data:
         for news in news_data[:10]:
             try:
                 pub_date = news.get('providerPublishTime')
@@ -298,11 +278,9 @@ def generate_deep_report(ticker, exchange):
         recent_high = df['High'].max()
         recent_low = df['Low'].min()
         
-        # 計算均線
         sma20 = df['Close'].rolling(20).mean()
         sma200 = df['Close'].rolling(200).mean()
         
-        # 計算 FIB
         drop_range = recent_high - recent_low
         fib_levels = {
             'high_price': recent_high, 'low_price': recent_low,
