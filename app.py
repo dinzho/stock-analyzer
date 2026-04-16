@@ -241,19 +241,11 @@ def fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df):
         
     return verified_catalysts
 
-# === 市場情緒分析函數（完整升級版）===
+# === 市場情緒分析函數 ===
 def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
-    """
-    完整市場情緒分析
-    包含：個股情緒 + 大盤對比 + VIX 恐慌指數 + 相對強弱
-    """
-    
-    # === 1. 個股情緒指標 ===
-    # 技術面
     stock_technical = "🟢 多頭" if current_price > sma20.iloc[-1] else "🔴 空頭"
     technical_detail = f"現價 ${current_price:.2f} vs SMA20 ${sma20.iloc[-1]:.2f}"
     
-    # 資金面（成交量）
     current_vol = df['Volume'].iloc[-1]
     avg_vol_10 = df['Volume'].rolling(10).mean().iloc[-1]
     vol_change_pct = ((current_vol / avg_vol_10 - 1) * 100) if avg_vol_10 > 0 else 0
@@ -265,7 +257,6 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
     else:
         stock_volume = f"➡️ 平量 ({vol_change_pct:+.1f}%)"
     
-    # 位置判斷
     if current_price > recent_low * 1.1:
         stock_position = "🔄 反彈初期"
     elif current_price > recent_low * 1.05:
@@ -273,20 +264,16 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
     else:
         stock_position = "⚠️ 接近低點"
     
-    # === 2. 大盤環境指標 ===
     try:
-        # 獲取 VIX 恐慌指數
         vix = yf.Ticker("^VIX").history(period="1d", interval="1d")
         vix_value = vix['Close'].iloc[-1] if not vix.empty else 20
         
-        # 獲取標普 500 漲跌
         spy = yf.Ticker("^GSPC").history(period="5d", interval="1d")
         if len(spy) >= 2:
             spy_change = ((spy['Close'].iloc[-1] - spy['Close'].iloc[-2]) / spy['Close'].iloc[-2]) * 100
         else:
             spy_change = 0
             
-        # 獲取納斯達克漲跌
         qqq = yf.Ticker("^IXIC").history(period="5d", interval="1d")
         if len(qqq) >= 2:
             nasdaq_change = ((qqq['Close'].iloc[-1] - qqq['Close'].iloc[-2]) / qqq['Close'].iloc[-2]) * 100
@@ -297,7 +284,6 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
         spy_change = 0
         nasdaq_change = 0
     
-    # VIX 情緒解讀
     if vix_value > 30:
         vix_mood = "😰 恐慌（高波動）"
         vix_icon = "🔴"
@@ -311,11 +297,9 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
         vix_mood = "😐 中性"
         vix_icon = "🟡"
     
-    # 大盤方向
     spy_icon = "🟢" if spy_change > 0 else "🔴"
     nasdaq_icon = "🟢" if nasdaq_change > 0 else "🔴"
     
-    # === 3. 相對強弱分析 ===
     stock_change = ((current_price - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100 if len(df) > 1 else 0
     relative_vs_spy = stock_change - spy_change
     relative_vs_nasdaq = stock_change - nasdaq_change
@@ -330,37 +314,17 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
         relative_strength = "🟡 同步大盤"
         relative_detail = f"個股 {stock_change:+.2f}% vs 標普 {spy_change:+.2f}%"
     
-    # === 4. 綜合解讀 ===
-    # 計算綜合評分
     score = 50
-    
-    # 技術面加減分
-    if current_price > sma20.iloc[-1]:
-        score += 15
-    else:
-        score -= 15
-    
-    # 成交量加減分
-    if vol_change_pct > 0:
-        score += 10
-    else:
-        score -= 10
-    
-    # 相對強弱加減分
-    if relative_vs_spy > 0:
-        score += 15
-    else:
-        score -= 15
-    
-    # VIX 加減分
-    if vix_value < 20:
-        score += 10
-    elif vix_value > 30:
-        score -= 10
-    
+    if current_price > sma20.iloc[-1]: score += 15
+    else: score -= 15
+    if vol_change_pct > 0: score += 10
+    else: score -= 10
+    if relative_vs_spy > 0: score += 15
+    else: score -= 15
+    if vix_value < 20: score += 10
+    elif vix_value > 30: score -= 10
     score = max(0, min(100, score))
     
-    # 綜合建議
     if score >= 70:
         overall_recommendation = "✅ 多頭環境：個股強勁 + 大盤穩定，適合積極操作"
     elif score >= 55:
@@ -370,7 +334,6 @@ def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
     else:
         overall_recommendation = "❌ 空頭環境：風險較高，建議防守為主"
     
-    # 計算個股當日漲跌
     prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
     price_change_pct = ((current_price - prev_close) / prev_close) * 100
     
@@ -411,13 +374,11 @@ def generate_deep_report(ticker, exchange):
     high_date = df['High'].idxmax().strftime('%Y-%m')
     low_date = df['Low'].idxmin().strftime('%Y-%m-%d')
     
-    # MACD
     exp1 = df['Close'].ewm(span=12, adjust=False).mean()
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
     signal_line = macd.ewm(span=9, adjust=False).mean()
     
-    # RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -429,9 +390,9 @@ def generate_deep_report(ticker, exchange):
     current_rsi = rsi.iloc[-1]
     
     sma20 = df['Close'].rolling(20).mean()
+    sma50 = df['Close'].rolling(50).mean()
     sma200 = df['Close'].rolling(200).mean()
     
-    # FIB
     drop_range = recent_high - recent_low
     fib_levels = {
         'high_price': recent_high, 'low_price': recent_low,
@@ -446,7 +407,6 @@ def generate_deep_report(ticker, exchange):
     with st.spinner("🔍 正在抓取並驗證催化劑數據..."):
         verified_catalysts = fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df)
 
-    # === 獲取市場情緒數據 ===
     with st.spinner("📊 正在分析市場情緒..."):
         sentiment_data = get_market_sentiment(ticker, df, current_price, sma20, recent_low)
 
@@ -476,39 +436,40 @@ def generate_deep_report(ticker, exchange):
     
     report = {}
     
-    # === 1. 技術結構 ===
+    # === 1. 標題與核心數據 ===
+    report['header'] = f"""
+### 📊 {safe_get('longName', ticker.upper())} ({ticker}:{exchange})
+> **📅 數據基準**：{last_trade_date} | **💰 現價**：${current_price:.2f} ({price_change_pct:+.2f}%)  
+> **52周**：${low_52w:.1f} - ${high_52w:.1f} | **市值**：${market_cap/1e9:.2f}B (若數據可用)
+"""
+
+    # === 2. 技術結構 ===
     if current_macd > current_signal and current_macd > 0:
-        trend_text = "MACD多頭排列，代表短線動能相對偏強"
+        trend_text = "MACD多頭排列，短線動能偏強"
     elif current_macd < current_signal and current_macd < 0:
-        trend_text = "MACD空頭排列，代表短線空頭動能仍相對佔優"
+        trend_text = "MACD空頭排列，短線動能偏弱"
     else:
         trend_text = "MACD糾結，方向不明"
         
     if 40 < current_rsi < 60:
-        rsi_text = f"RSI落在{current_rsi:.1f}的性偏多區間，未進入超買區，顯示當前下殺動能尚未極化，整體處於多空爭奪的關鍵節點"
+        rsi_text = f"RSI {current_rsi:.1f}（中性偏多）"
     elif current_rsi > 70:
-        rsi_text = f"RSI達到{current_rsi:.1f}進入超買區，需警惕回調風險"
+        rsi_text = f"RSI {current_rsi:.1f}（超買警示）"
     else:
-        rsi_text = f"RSI處於{current_rsi:.1f}低位，存在超賣反彈需求"
+        rsi_text = f"RSI {current_rsi:.1f}（超賣反彈）"
     
     fib_position = ((current_price - recent_low)/drop_range)*100 if drop_range > 0 else 0
-    wave_text = f"當前價格貼近本輪上升波段的{fib_position:.1f}%回撤位，屬於上升浪後的深度回測階段，若守住該支撐則有機會開啟反彈浪，跌破則確認走勢轉空"
-    
-    if current_price > sma20.iloc[-1]:
-        ma_text = "均線：股價站上SMA20，短線偏多"
-    elif current_price < sma200.iloc[-1]:
-        ma_text = "均線：股價低於SMA200，長線偏空"
-    else:
-        ma_text = "均線：股價在均線間震盪"
+    wave_text = f"位於波段 {fib_position:.1f}% 回撤位"
     
     report['tech_structure'] = f"""
 ### 📈 技術結構
-*   **趨勢**：{trend_text}；但{rsi_text}。
-*   **波浪**：{wave_text}。
-*   {ma_text}。
+*   **趨勢**：{trend_text}
+*   **動能**：{rsi_text}
+*   **位置**：{wave_text}
+*   **均線**：{"✅ 站上SMA20" if current_price > sma20.iloc[-1] else "⚠️ 低於SMA20"} | {"✅ 站上SMA200" if current_price > sma200.iloc[-1] else "🔴 低於SMA200"}
 """
 
-    # === 2. 關鍵位 ===
+    # === 3. 關鍵位 ===
     fib_names = {
         '0.236': '23.6%回撤位',
         '0.382': '38.2%回撤位',
@@ -531,212 +492,181 @@ def generate_deep_report(ticker, exchange):
     resistances_raw.sort(key=lambda x: x['price'])
     supports_raw.sort(key=lambda x: x['price'], reverse=True)
     
-    resistance_lines = []
-    for i, lvl in enumerate(resistances_raw[:5], 1):
-        resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
-    
-    support_lines = []
-    for i, lvl in enumerate(supports_raw[:5], 1):
-        is_close = " (當前價格緊鄰該位置)" if i == 1 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ""
-        support_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}{is_close}")
+    resistance_lines = [f"{i}. {lvl['name']} ${lvl['price']:.2f}" for i, lvl in enumerate(resistances_raw[:5], 1)]
+    support_lines = [f"{i}. {lvl['name']} ${lvl['price']:.2f}{' (緊鄰)' if i == 1 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ''}" for i, lvl in enumerate(supports_raw[:5], 1)]
     
     report['key_levels'] = f"""
 ### 📐 關鍵位
 
 **壓力位（由近至遠）**
-{chr(10).join(resistance_lines) if resistance_lines else "暫無明顯壓力位"}
+{chr(10).join(resistance_lines) if resistance_lines else "暫無明顯壓力"}
 
 **支撐位（由近至遠）**
-{chr(10).join(support_lines) if support_lines else "暫無明顯支撐位"}
+{chr(10).join(support_lines) if support_lines else "暫無明顯支撐"}
 """
 
-    # === 3. 操作參考 ===
-    first_support = supports_raw[0]['price'] if supports_raw else recent_low
-    second_support = supports_raw[1]['price'] if len(supports_raw) > 1 else first_support * 0.95
-    first_resistance_price = resistances_raw[0]['price'] if resistances_raw else recent_high
-    
-    report['action_plan'] = f"""
-### 🎯 操作參考
-*   🟢 **偏多**：價格穩站{first_support:.2f}支撐之上，伴隨MACD出現黃金交叉、RSI站穩60上方，可偏多布局，第一目標看{first_resistance_price:.2f}，突破後再看下一檔。
-*   🟡 **觀望**：價格在{second_support:.2f}-{first_resistance_price:.2f}區間震盪、MACD未出現明確翻多訊號、也未有效跌破{first_support:.2f}支撐時，建議觀望為主，等待方向明朗。
-*   🔴 **防守**：價格有效跌破{first_support:.2f}支撐（連續2個交易日收盤在該價之下，或單日大跌3%以上跌破）、且RSI跌破50進入偏空區間時，建議止損防守，避免後續大幅下行風險。
-"""
+    # === 4. 圖表 ===
+    # (在 main 中顯示)
 
-    # === 4. 風險評分 ===
-    risk_score = 50
-    risk_reason = []
-    if current_macd < 0: 
-        risk_score += 15
-        risk_reason.append("MACD處於空頭結構")
-    if current_price < sma200.iloc[-1]:
-        risk_score += 15
-        risk_reason.append("股價在年線之下")
-    if current_rsi > 70:
-        risk_score += 10
-        risk_reason.append("RSI超買")
-    elif current_rsi < 30:
-        risk_score -= 10
-        
-    risk_score = max(0, min(100, risk_score))
-    risk_text = f"評分：{risk_score}分 理由：{'；'.join(risk_reason) if risk_reason else '指標中性'}。短期MACD處於空頭結構，仍有下測支撐的動能，若跌破{first_support:.2f}關鍵支撐，後續下行空間將打開；但當前價格貼近強支撐位，若守住則有反彈機會，多空不確定性較高，屬於中等偏高風險區間。"
-    
-    report['risk'] = f"""
-### ⚠️ 風險 (0-100)
-{risk_text}
-"""
-
-    # === 5. 市場情緒（完整升級版）===
+    # === 5. 市場情緒 ===
     report['sentiment'] = f"""
-### 🧠 7. 市場情緒
+### 🧠 市場情緒
 
-#### 🔹 個股情緒（基於 {ticker} 本身）
-*   **技術面**：{sentiment_data['stock_technical']}（{sentiment_data['technical_detail']}）
-*   **資金面**：{sentiment_data['stock_volume']}
-*   **位置**：{sentiment_data['stock_position']}
-*   **當日漲跌**：{price_change_pct:+.2f}%
+**個股情緒**
+*   技術：{sentiment_data['stock_technical']}
+*   資金：{sentiment_data['stock_volume']}
+*   位置：{sentiment_data['stock_position']}
 
-#### 🔹 大盤環境（宏觀參考）
-*   **標普 500**：{sentiment_data['spy_icon']} {sentiment_data['spy_change']:+.2f}%
-*   **納斯達克**：{sentiment_data['nasdaq_icon']} {sentiment_data['nasdaq_change']:+.2f}%
-*   **VIX 恐慌指數**：{sentiment_data['vix_icon']} {sentiment_data['vix_value']:.1f} → {sentiment_data['vix_mood']}
-*   **相對強弱**：{sentiment_data['relative_strength']}（{sentiment_data['relative_detail']}）
+**大盤環境**
+*   標普 500：{sentiment_data['spy_icon']} {sentiment_data['spy_change']:+.2f}%
+*   納指：{sentiment_data['nasdaq_icon']} {sentiment_data['nasdaq_change']:+.2f}%
+*   VIX：{sentiment_data['vix_icon']} {sentiment_data['vix_value']:.1f} ({sentiment_data['vix_mood']})
+*   相對強弱：{sentiment_data['relative_strength']}
 
-#### 💡 綜合解讀
-**情緒評分**：{sentiment_data['score']}/100
-
+**綜合評分**：{sentiment_data['score']}/100  
 {sentiment_data['overall_recommendation']}
 """
 
-    # === 保留原有部分 ===
-    report['header'] = f"""
-### 📊 {safe_get('longName', ticker.upper())} ({ticker}:{exchange}) 完整深度分析報告
-> **📅 數據基準**：{last_trade_date} 收盤 | **💰 現價**：${current_price:.2f} ({price_change_pct:+.2f}%)
-"""
-
-    report['core_data'] = {
-        "標題": "📈 1. 核心數據概覽",
-        "表格": pd.DataFrame({
-            "指標": ["52周範圍", "市值", "PE (TTM)", "Beta"],
-            "數值": [
-                f"${low_52w:.1f} - ${high_52w:.1f}",
-                f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
-                f"{pe_ratio:.2f}" if pe_ratio else "N/A",
-                f"{beta:.2f}"
-            ]
-        })
-    }
-
-    fib_382 = fib_levels['0.382']
-    report['fib'] = f"""
-### 📐 3. 關鍵阻力 (Fibonacci)
-*   **0.382 黃金坑**: ${fib_382:.2f}
-*   **0.500 中軸**: ${fib_levels['0.500']:.2f}
-*   **當前**: {"✅ 突破 0.382" if current_price > fib_382 else "⚠️ 受壓於 0.382"}
-"""
-
-    bargaining_summary = ""
-    if industry_analysis['downstream'] == "強勢" and industry_analysis['upstream'] == "強勢":
-        bargaining_summary = "**雙向強勢 (产业链霸主)**：對上下游均有極強話語權。"
-    elif industry_analysis['downstream'] == "強勢":
-        bargaining_summary = "🛡️ **對下游強勢 (品牌/技術護城河)**：產品有定價權。"
-    elif industry_analysis['upstream'] == "強勢":
-        bargaining_summary = "🏭 **對上游強勢 (規模效應)**：能壓低採購成本。"
-    else:
-        bargaining_summary = "⚖️ **競爭激烈**：上下游議價能力均一般。"
-
+    # === 6. 基本面分析 ===
     report['fundamental'] = f"""
-### 💎 5. 基本面深度掃描
+### 💎 基本面分析
 
-#### 5.1 行業屬性與產業鏈定位
-*   **所屬行業**：{sector or 'N/A'} / {industry or 'N/A'}
-*   **行業性質**：{industry_analysis['nature']}
-*   **產業鏈位置**：{industry_analysis['position']}
-*   **議價能力**：
-    *   🔼 **對上游**：{industry_analysis['upstream']}
-    *   🔽 **對下游**：{industry_analysis['downstream']}
-    *   💡 **總結**：{bargaining_summary}
+**行業定位**
+*   所屬：{sector or 'N/A'} / {industry or 'N/A'}
+*   性質：{industry_analysis['nature']}
+*   位置：{industry_analysis['position']}
 
-#### 5.2 核心財務指標
-| 指標 | 數值 | 分析 |
+**議價能力**
+*   對上游：{industry_analysis['upstream']}
+*   對下游：{industry_analysis['downstream']}
+*   總結：{"✅ 雙向強勢" if industry_analysis['downstream'] == "強勢" and industry_analysis['upstream'] == "強勢" else "⚖️ 競爭激烈"}
+"""
+
+    # === 7. 財報分析 ===
+    report['financial'] = f"""
+### 💰 財報分析
+
+| 指標 | 數值 | 評估 |
 | :--- | :--- | :--- |
 | **ROE** | {f"{roe*100:.1f}%" if roe else "N/A"} | {"✅ 優秀 (>15%)" if roe and roe > 0.15 else "⚠️ 一般" if roe else "N/A"} |
-| **營收增長率** | {f"{revenue_growth*100:.1f}%" if revenue_growth else "N/A"} | {"🚀 高速" if revenue_growth and revenue_growth > 0.2 else "📈 穩健" if revenue_growth and revenue_growth > 0.1 else "🐢 放緩" if revenue_growth else "N/A"} |
-| **毛利率** | {f"{gross_margin*100:.1f}%" if gross_margin else "N/A"} | {"💰 高毛利" if gross_margin and gross_margin > 0.5 else "🏭 標準" if gross_margin else "N/A"} |
-| **PE估值** | {f"{pe_ratio:.1f}x" if pe_ratio else "N/A"} | {"💸 高估值" if pe_ratio and pe_ratio > 40 else "⚖️ 合理" if pe_ratio and 15 < pe_ratio < 40 else "💰 低估值" if pe_ratio and pe_ratio < 15 else "N/A"} |
+| **營收增長** | {f"{revenue_growth*100:.1f}%" if revenue_growth else "N/A"} | {"🚀 高速 (>20%)" if revenue_growth and revenue_growth > 0.2 else "📈 穩健" if revenue_growth and revenue_growth > 0.1 else "🐢 放緩" if revenue_growth else "N/A"} |
+| **毛利率** | {f"{gross_margin*100:.1f}%" if gross_margin else "N/A"} | {"💰 高毛利 (>50%)" if gross_margin and gross_margin > 0.5 else "🏭 標準" if gross_margin else "N/A"} |
+| **PE (TTM)** | {f"{pe_ratio:.1f}x" if pe_ratio else "N/A"} | {"💸 高估值" if pe_ratio and pe_ratio > 40 else "⚖️ 合理" if pe_ratio and 15 < pe_ratio < 40 else "💰 低估值" if pe_ratio and pe_ratio < 15 else "N/A"} |
 """
 
-    catalysts_text = f"""
-### 🔮 6. 未來預期與催化劑 (Catalysts)
-*📅 數據抓取時間：{today_str} | 來源：Yahoo Finance / 官方公告*
+    # === 8. 投資評級 ===
+    # 計算投資評級
+    rating_score = 0
+    rating_reasons = []
+    
+    if roe and roe > 0.15:
+        rating_score += 2
+        rating_reasons.append("ROE優秀")
+    if revenue_growth and revenue_growth > 0.15:
+        rating_score += 2
+        rating_reasons.append("增長強勁")
+    if pe_ratio and pe_ratio < 30:
+        rating_score += 1
+        rating_reasons.append("估值合理")
+    if current_price > sma200.iloc[-1]:
+        rating_score += 1
+        rating_reasons.append("趨勢向上")
+    if sentiment_data['score'] >= 60:
+        rating_score += 1
+        rating_reasons.append("情緒偏多")
+    
+    if rating_score >= 6:
+        rating = "🟢 強烈買入"
+        rating_detail = f"評分：{rating_score}/7 - {'、'.join(rating_reasons)}"
+    elif rating_score >= 4:
+        rating = "🟡 買入/增持"
+        rating_detail = f"評分：{rating_score}/7 - {'、'.join(rating_reasons)}"
+    elif rating_score >= 2:
+        rating = "🟠 持有/觀望"
+        rating_detail = f"評分：{rating_score}/7 - {'、'.join(rating_reasons)}"
+    else:
+        rating = "🔴 減持/賣出"
+        rating_detail = f"評分：{rating_score}/7 - {'、'.join(rating_reasons) if rating_reasons else '多項指標偏弱'}"
+    
+    report['rating'] = f"""
+### 🏆 投資評級
 
-#### ✅ 已驗證的正面催化劑
+**{rating}**  
+{rating_detail}
+
+**分析師目標價**：${verified_catalysts['target_price'].get('mean', 'N/A'):.2f} (upside {verified_catalysts['target_price'].get('upside', 0):+.1f}%) (若數據可用)
 """
+
+    # === 9. 操作策略（入場點 + 止盈止損）===
+    first_support = supports_raw[0]['price'] if supports_raw else recent_low
+    second_support = supports_raw[1]['price'] if len(supports_raw) > 1 else first_support * 0.95
+    third_support = supports_raw[2]['price'] if len(supports_raw) > 2 else first_support * 0.85
+    
+    first_resistance = resistances_raw[0]['price'] if resistances_raw else recent_high
+    second_resistance = resistances_raw[1]['price'] if len(resistances_raw) > 1 else first_resistance * 1.1
+    third_resistance = resistances_raw[2]['price'] if len(resistances_raw) > 2 else first_resistance * 1.2
+    
+    short_entry = first_support * 1.02  # 短線在支撐位附近2%內入場
+    long_entry = second_support * 1.03  # 長線在第二支撐位附近3%內入場
+    
+    stop_loss_short = first_support * 0.97  # 短線止損在支撐下3%
+    stop_loss_long = third_support * 0.95   # 長線止損在第三支撐下5%
+    
+    take_profit_1 = first_resistance * 0.98  # 第一止盈在阻力下2%
+    take_profit_2 = second_resistance * 0.97 # 第二止盈在第二阻力下3%
+    take_profit_3 = third_resistance * 0.95  # 第三止盈
+    
+    report['strategy'] = f"""
+### 🎯 操作策略
+
+**入場位置**
+*   🟢 **短線回調入場**：${short_entry:.2f} (靠近第一支撐 ${first_support:.2f})
+*   🔵 **長線回調入場**：${long_entry:.2f} (靠近第二支撐 ${second_support:.2f})
+
+**止盈目標**
+*   🎯 **第一目標**：${take_profit_1:.2f} (阻力 ${first_resistance:.2f})
+*   🎯 **第二目標**：${take_profit_2:.2f} (阻力 ${second_resistance:.2f})
+*   🎯 **第三目標**：${take_profit_3:.2f} (阻力 ${third_resistance:.2f})
+
+**止損策略**
+*   🔴 **短線止損**：${stop_loss_short:.2f} (跌破第一支撐 3%)
+*   🔴 **長線止損**：${stop_loss_long:.2f} (跌破第三支撐 5%)
+
+**風險回報比**
+*   短線：1:{((take_profit_1 - short_entry) / (short_entry - stop_loss_short)):.1f}
+*   長線：1:{((take_profit_2 - long_entry) / (long_entry - stop_loss_long)):.1f}
+"""
+
+    # === 10. 催化劑 ===
+    catalysts_text = "### 🔮 催化劑與風險\n\n"
     
     if verified_catalysts['upcoming_events']:
-        catalysts_text += "\n**📅 即將發生的重大事件：**\n"
-        for event in verified_catalysts['upcoming_events']:
-            catalysts_text += f"- **{event['date']}** | {event['type']} | 重要性：{event['importance']}\n"
+        catalysts_text += "**即將發生事件**\n"
+        for event in verified_catalysts['upcoming_events'][:2]:
+            catalysts_text += f"*   📅 {event['date']} | {event['type']}\n"
+        catalysts_text += "\n"
     
     if verified_catalysts['analyst_actions']:
-        catalysts_text += "\n**📊 近期分析師評級調整：**\n"
-        for action in verified_catalysts['analyst_actions'][:5]:
-            catalysts_text += f"- **{action['firm']}** ({action['date']}): {action['action']} → {action['rating']}\n"
+        catalysts_text += "**分析師評級**\n"
+        for action in verified_catalysts['analyst_actions'][:2]:
+            catalysts_text += f"*   {action['firm']}: {action['action']} → {action['rating']}\n"
+        catalysts_text += "\n"
     
-    if verified_catalysts['product_launches']:
-        catalysts_text += "\n**🚀 產品/業務進展：**\n"
-        for product in verified_catalysts['product_launches'][:3]:
-            catalysts_text += f"- **{product['date']}**: {product['title']}\n"
-    
-    if verified_catalysts['financial_events']:
-        catalysts_text += "\n**🤝 合作/戰略事件：**\n"
-        for event in verified_catalysts['financial_events'][:3]:
-            catalysts_text += f"- **{event['date']}**: {event['title']}\n"
-    
-    if verified_catalysts['target_price'] and verified_catalysts['target_price'].get('verified'):
-        tp = verified_catalysts['target_price']
-        catalysts_text += f"""
-**🎯 分析師目標價 (已驗證)：**
-- 平均目標價：**${tp['mean']:.2f}** (較現價 {tp['upside']:+.1f}%)
-- 區間：${tp['low']:.2f} - ${tp['high']:.2f}
-- 當前價：${tp['current']:.2f}
-"""
-    
-    recent_positive = [n for n in verified_catalysts['recent_news'] if n['type'] == '正面催化']
-    if recent_positive:
-        catalysts_text += "\n**📰 近期重要正面新聞：**\n"
-        for news in recent_positive[:3]:
-            catalysts_text += f"- **{news['date']}** ({news['publisher']}): {news['title'][:100]}...\n"
-    
-    catalysts_text += "\n#### ⚠️ 已識別的風險因素\n"
     if verified_catalysts['risks']:
-        for risk in verified_catalysts['risks'][:5]:
-            if isinstance(risk, dict): catalysts_text += f"- **{risk['date']}**: {risk['title'][:100]}...\n"
-            else: catalysts_text += f"- {risk}\n"
-    else:
-        catalysts_text += "- 暫無重大風險信號\n"
-
+        catalysts_text += "**風險因素**\n"
+        for risk in verified_catalysts['risks'][:3]:
+            if isinstance(risk, dict):
+                catalysts_text += f"*   ⚠️ {risk['title'][:60]}...\n"
+            else:
+                catalysts_text += f"*   ⚠️ {risk}\n"
+    
     report['catalysts'] = catalysts_text
 
-    report['strategy'] = f"""
-### 🎯 8. 交易策略
-*   **短線**：支撐 ${sma20.iloc[-1]:.2f} / 阻力 ${fib_382:.2f}
-*   **中長線**：{"✅ 逢低吸納" if (roe and roe > 0.15) or (industry_analysis['downstream'] == "強勢") else "⚠️ 波段操作"}
-"""
-
-    report['verification_note'] = f"""
+    # === 11. 免責聲明 ===
+    report['disclaimer'] = f"""
 ---
-### 📋 數據驗證說明
-**🔍 數據來源與驗證標準：**
-- ✅ 所有催化劑均來自官方新聞/公告/財報
-- ✅ 分析師評級已交叉驗證時間戳
-- ✅ 目標價已進行合理性檢查 (漲幅 <100%)
-- ⏰ 數據更新頻率：實時 (延遲15分鐘)
-- 📊 新聞來源：Yahoo Finance / Reuters / Bloomberg
-- 💡 建議：投資決策請結合多方信息獨立判斷
-
-*報告生成時間：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | 數據基準日：{last_trade_date}*
-
-⚠️ **免責聲明**：本分析僅供參考，不構成投資建議。股市有風險，入市需謹慎。
+### ⚠️ 免責聲明
+本報告僅供參考，不構成投資建議。數據來源：Yahoo Finance | 生成時間：{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
 
     return report, fig, None
@@ -751,36 +681,37 @@ if analyze_btn and ticker_input.strip():
             
             if error:
                 st.error(f"❌ {error}")
-                st.info("💡 建議：等待 15-30 分鐘後再試，或檢查股票代碼。")
             else:
+                # 專業排版順序
                 st.markdown(report['header'])
+                st.markdown("---")
                 
-                st.info("🔔 **即時信號**")
-                st.markdown(report['tech_structure'])
-                st.markdown(report['key_levels'])
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.markdown(report['tech_structure'])
+                with col2:
+                    st.markdown(report['key_levels'])
                 
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
                 
-                st.markdown(report['action_plan'])
-                
-                # 顯示完整升級版的市場情緒
                 st.markdown(report['sentiment'])
+                st.markdown("---")
                 
-                st.warning(report['risk'])
+                col3, col4 = st.columns(2)
+                with col3:
+                    st.markdown(report['fundamental'])
+                with col4:
+                    st.markdown(report['financial'])
                 
-                st.subheader(report['core_data']['標題'])
-                st.dataframe(report['core_data']['表格'], hide_index=True, use_container_width=True)
-                
-                st.markdown(report['fib'])
-                st.markdown(report['fundamental'])
-                st.markdown(report['catalysts'])
+                st.markdown(report['rating'])
                 st.markdown(report['strategy'])
-                st.markdown(report['verification_note'])
+                st.markdown(report['catalysts'])
+                st.markdown(report['disclaimer'])
                 
         except Exception as e:
             st.error(f"❌ 系統錯誤：{e}")
             st.exception(e)
 
 elif not ticker_input.strip():
-    st.info("👈 請輸入股票代碼開始分析")
+    st.info("👈 請在左側輸入股票代碼開始分析")
