@@ -241,6 +241,158 @@ def fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df):
         
     return verified_catalysts
 
+# === 市場情緒分析函數（完整升級版）===
+def get_market_sentiment(ticker, df, current_price, sma20, recent_low):
+    """
+    完整市場情緒分析
+    包含：個股情緒 + 大盤對比 + VIX 恐慌指數 + 相對強弱
+    """
+    
+    # === 1. 個股情緒指標 ===
+    # 技術面
+    stock_technical = "🟢 多頭" if current_price > sma20.iloc[-1] else "🔴 空頭"
+    technical_detail = f"現價 ${current_price:.2f} vs SMA20 ${sma20.iloc[-1]:.2f}"
+    
+    # 資金面（成交量）
+    current_vol = df['Volume'].iloc[-1]
+    avg_vol_10 = df['Volume'].rolling(10).mean().iloc[-1]
+    vol_change_pct = ((current_vol / avg_vol_10 - 1) * 100) if avg_vol_10 > 0 else 0
+    
+    if vol_change_pct > 20:
+        stock_volume = f"📈 放量 (+{vol_change_pct:.1f}%)"
+    elif vol_change_pct < -20:
+        stock_volume = f"📉 縮量 ({vol_change_pct:.1f}%)"
+    else:
+        stock_volume = f"➡️ 平量 ({vol_change_pct:+.1f}%)"
+    
+    # 位置判斷
+    if current_price > recent_low * 1.1:
+        stock_position = "🔄 反彈初期"
+    elif current_price > recent_low * 1.05:
+        stock_position = " 築底階段"
+    else:
+        stock_position = "⚠️ 接近低點"
+    
+    # === 2. 大盤環境指標 ===
+    try:
+        # 獲取 VIX 恐慌指數
+        vix = yf.Ticker("^VIX").history(period="1d", interval="1d")
+        vix_value = vix['Close'].iloc[-1] if not vix.empty else 20
+        
+        # 獲取標普 500 漲跌
+        spy = yf.Ticker("^GSPC").history(period="5d", interval="1d")
+        if len(spy) >= 2:
+            spy_change = ((spy['Close'].iloc[-1] - spy['Close'].iloc[-2]) / spy['Close'].iloc[-2]) * 100
+        else:
+            spy_change = 0
+            
+        # 獲取納斯達克漲跌
+        qqq = yf.Ticker("^IXIC").history(period="5d", interval="1d")
+        if len(qqq) >= 2:
+            nasdaq_change = ((qqq['Close'].iloc[-1] - qqq['Close'].iloc[-2]) / qqq['Close'].iloc[-2]) * 100
+        else:
+            nasdaq_change = 0
+    except:
+        vix_value = 20
+        spy_change = 0
+        nasdaq_change = 0
+    
+    # VIX 情緒解讀
+    if vix_value > 30:
+        vix_mood = "😰 恐慌（高波動）"
+        vix_icon = "🔴"
+    elif vix_value > 25:
+        vix_mood = "😟 謹慎（中高波動）"
+        vix_icon = "🟠"
+    elif vix_value < 18:
+        vix_mood = "😌 樂觀（低波動）"
+        vix_icon = "🟢"
+    else:
+        vix_mood = "😐 中性"
+        vix_icon = "🟡"
+    
+    # 大盤方向
+    spy_icon = "🟢" if spy_change > 0 else "🔴"
+    nasdaq_icon = "🟢" if nasdaq_change > 0 else "🔴"
+    
+    # === 3. 相對強弱分析 ===
+    stock_change = ((current_price - df['Close'].iloc[-2]) / df['Close'].iloc[-2]) * 100 if len(df) > 1 else 0
+    relative_vs_spy = stock_change - spy_change
+    relative_vs_nasdaq = stock_change - nasdaq_change
+    
+    if relative_vs_spy > 2:
+        relative_strength = "🟢 強於大盤"
+        relative_detail = f"個股 {stock_change:+.2f}% vs 標普 {spy_change:+.2f}% (+{relative_vs_spy:.2f}%)"
+    elif relative_vs_spy < -2:
+        relative_strength = "🔴 弱於大盤"
+        relative_detail = f"個股 {stock_change:+.2f}% vs 標普 {spy_change:+.2f}% ({relative_vs_spy:.2f}%)"
+    else:
+        relative_strength = "🟡 同步大盤"
+        relative_detail = f"個股 {stock_change:+.2f}% vs 標普 {spy_change:+.2f}%"
+    
+    # === 4. 綜合解讀 ===
+    # 計算綜合評分
+    score = 50
+    
+    # 技術面加減分
+    if current_price > sma20.iloc[-1]:
+        score += 15
+    else:
+        score -= 15
+    
+    # 成交量加減分
+    if vol_change_pct > 0:
+        score += 10
+    else:
+        score -= 10
+    
+    # 相對強弱加減分
+    if relative_vs_spy > 0:
+        score += 15
+    else:
+        score -= 15
+    
+    # VIX 加減分
+    if vix_value < 20:
+        score += 10
+    elif vix_value > 30:
+        score -= 10
+    
+    score = max(0, min(100, score))
+    
+    # 綜合建議
+    if score >= 70:
+        overall_recommendation = "✅ 多頭環境：個股強勁 + 大盤穩定，適合積極操作"
+    elif score >= 55:
+        overall_recommendation = "⚖️ 中性偏多：環境尚可，建議精選個股、控制倉位"
+    elif score >= 40:
+        overall_recommendation = "⚠️ 中性偏空：大盤波動或個股弱勢，建議謹慎觀望"
+    else:
+        overall_recommendation = "❌ 空頭環境：風險較高，建議防守為主"
+    
+    # 計算個股當日漲跌
+    prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
+    price_change_pct = ((current_price - prev_close) / prev_close) * 100
+    
+    return {
+        'stock_technical': stock_technical,
+        'technical_detail': technical_detail,
+        'stock_volume': stock_volume,
+        'stock_position': stock_position,
+        'vix_value': vix_value,
+        'vix_mood': vix_mood,
+        'vix_icon': vix_icon,
+        'spy_change': spy_change,
+        'spy_icon': spy_icon,
+        'nasdaq_change': nasdaq_change,
+        'nasdaq_icon': nasdaq_icon,
+        'relative_strength': relative_strength,
+        'relative_detail': relative_detail,
+        'score': score,
+        'overall_recommendation': overall_recommendation,
+        'price_change_pct': price_change_pct
+    }
+
 # === 核心報告生成函數 ===
 def generate_deep_report(ticker, exchange):
     stock, df, info, news_data, recommendations, error = fetch_stock_data(ticker)
@@ -293,6 +445,10 @@ def generate_deep_report(ticker, exchange):
 
     with st.spinner("🔍 正在抓取並驗證催化劑數據..."):
         verified_catalysts = fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df)
+
+    # === 獲取市場情緒數據 ===
+    with st.spinner("📊 正在分析市場情緒..."):
+        sentiment_data = get_market_sentiment(ticker, df, current_price, sma20, recent_low)
 
     high_52w = df['High'].rolling(252).max().iloc[-1]
     low_52w = df['Low'].rolling(252).min().iloc[-1]
@@ -352,7 +508,7 @@ def generate_deep_report(ticker, exchange):
 *   {ma_text}。
 """
 
-    # === 2. 關鍵位 (修正版) ===
+    # === 2. 關鍵位 ===
     fib_names = {
         '0.236': '23.6%回撤位',
         '0.382': '38.2%回撤位',
@@ -375,17 +531,10 @@ def generate_deep_report(ticker, exchange):
     resistances_raw.sort(key=lambda x: x['price'])
     supports_raw.sort(key=lambda x: x['price'], reverse=True)
     
-    # 動態生成壓力位文本
     resistance_lines = []
     for i, lvl in enumerate(resistances_raw[:5], 1):
-        if i == 1:
-            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
-        elif i == len(resistances_raw):
-            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
-        else:
-            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
+        resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
     
-    # 動態生成支撐位文本
     support_lines = []
     for i, lvl in enumerate(supports_raw[:5], 1):
         is_close = " (當前價格緊鄰該位置)" if i == 1 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ""
@@ -401,8 +550,7 @@ def generate_deep_report(ticker, exchange):
 {chr(10).join(support_lines) if support_lines else "暫無明顯支撐位"}
 """
 
-    # === 3. 操作參考 (修正價格) ===
-    # 使用正確的支撐位價格
+    # === 3. 操作參考 ===
     first_support = supports_raw[0]['price'] if supports_raw else recent_low
     second_support = supports_raw[1]['price'] if len(supports_raw) > 1 else first_support * 0.95
     first_resistance_price = resistances_raw[0]['price'] if resistances_raw else recent_high
@@ -435,6 +583,28 @@ def generate_deep_report(ticker, exchange):
     report['risk'] = f"""
 ### ⚠️ 風險 (0-100)
 {risk_text}
+"""
+
+    # === 5. 市場情緒（完整升級版）===
+    report['sentiment'] = f"""
+### 🧠 7. 市場情緒
+
+#### 🔹 個股情緒（基於 {ticker} 本身）
+*   **技術面**：{sentiment_data['stock_technical']}（{sentiment_data['technical_detail']}）
+*   **資金面**：{sentiment_data['stock_volume']}
+*   **位置**：{sentiment_data['stock_position']}
+*   **當日漲跌**：{price_change_pct:+.2f}%
+
+#### 🔹 大盤環境（宏觀參考）
+*   **標普 500**：{sentiment_data['spy_icon']} {sentiment_data['spy_change']:+.2f}%
+*   **納斯達克**：{sentiment_data['nasdaq_icon']} {sentiment_data['nasdaq_change']:+.2f}%
+*   **VIX 恐慌指數**：{sentiment_data['vix_icon']} {sentiment_data['vix_value']:.1f} → {sentiment_data['vix_mood']}
+*   **相對強弱**：{sentiment_data['relative_strength']}（{sentiment_data['relative_detail']}）
+
+#### 💡 綜合解讀
+**情緒評分**：{sentiment_data['score']}/100
+
+{sentiment_data['overall_recommendation']}
 """
 
     # === 保留原有部分 ===
@@ -547,13 +717,6 @@ def generate_deep_report(ticker, exchange):
 
     report['catalysts'] = catalysts_text
 
-    report['sentiment'] = f"""
-### 🧠 7. 市場情緒
-*   **技術面**：{"多頭" if current_price > sma20.iloc[-1] else "空頭"}
-*   **資金面**：{"放量" if df['Volume'].iloc[-1] > df['Volume'].rolling(10).mean().iloc[-1] else "縮量"}
-*   **結論**：{"反彈初期" if current_price > recent_low * 1.05 else "尋底過程"}
-"""
-
     report['strategy'] = f"""
 ### 🎯 8. 交易策略
 *   **短線**：支撐 ${sma20.iloc[-1]:.2f} / 阻力 ${fib_382:.2f}
@@ -600,6 +763,10 @@ if analyze_btn and ticker_input.strip():
                     st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown(report['action_plan'])
+                
+                # 顯示完整升級版的市場情緒
+                st.markdown(report['sentiment'])
+                
                 st.warning(report['risk'])
                 
                 st.subheader(report['core_data']['標題'])
@@ -608,7 +775,6 @@ if analyze_btn and ticker_input.strip():
                 st.markdown(report['fib'])
                 st.markdown(report['fundamental'])
                 st.markdown(report['catalysts'])
-                st.markdown(report['sentiment'])
                 st.markdown(report['strategy'])
                 st.markdown(report['verification_note'])
                 
