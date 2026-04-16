@@ -93,14 +93,12 @@ def generate_clean_chart(df, fib_levels):
     
     fig = go.Figure()
 
-    # 1. K 線
     fig.add_trace(go.Candlestick(
         x=x, open=open_, high=high, low=low, close=close,
         name="K線", increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
         increasing_fillcolor='#26a69a', decreasing_fillcolor='#ef5350'
     ))
 
-    # 2. Fibonacci 水平虛線
     fib_ratios = ['0.000', '0.236', '0.382', '0.500', '0.618', '0.786', '1.000']
     
     for ratio in fib_ratios:
@@ -355,8 +353,6 @@ def generate_deep_report(ticker, exchange):
 """
 
     # === 2. 關鍵位 (修正版) ===
-    # 收集所有FIB關鍵位
-    all_levels = []
     fib_names = {
         '0.236': '23.6%回撤位',
         '0.382': '38.2%回撤位',
@@ -365,57 +361,57 @@ def generate_deep_report(ticker, exchange):
         '0.786': '78.6%回撤位'
     }
     
+    all_levels = []
     for key, name in fib_names.items():
         if key in fib_levels:
             all_levels.append({'name': name, 'price': fib_levels[key]})
     
-    # 添加高低點
     all_levels.append({'name': '近期低點', 'price': recent_low})
     all_levels.append({'name': '近期高點', 'price': recent_high})
     
-    # 分類：壓力位（比現價高）和支撐位（比現價低）
     resistances_raw = [lvl for lvl in all_levels if lvl['price'] > current_price * 1.005]
     supports_raw = [lvl for lvl in all_levels if lvl['price'] < current_price * 0.995]
     
-    # 壓力位：由近至遠 = 價格由低到高排序
     resistances_raw.sort(key=lambda x: x['price'])
-    # 支撐位：由近至遠 = 價格由高到低排序
     supports_raw.sort(key=lambda x: x['price'], reverse=True)
     
-    # 格式化輸出
-    resistances = []
-    for i, lvl in enumerate(resistances_raw[:5]):  # 最多5個
-        resistances.append(f"{lvl['name']} {lvl['price']:.2f}")
+    # 動態生成壓力位文本
+    resistance_lines = []
+    for i, lvl in enumerate(resistances_raw[:5], 1):
+        if i == 1:
+            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
+        elif i == len(resistances_raw):
+            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
+        else:
+            resistance_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}")
     
-    supports = []
-    for i, lvl in enumerate(supports_raw[:5]):  # 最多5個
-        suffix = " (當前價格緊鄰該位置)" if i == 0 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ""
-        supports.append(f"{lvl['name']} {lvl['price']:.2f}{suffix}")
+    # 動態生成支撐位文本
+    support_lines = []
+    for i, lvl in enumerate(supports_raw[:5], 1):
+        is_close = " (當前價格緊鄰該位置)" if i == 1 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ""
+        support_lines.append(f"{i}. {lvl['name']} {lvl['price']:.2f}{is_close}")
     
     report['key_levels'] = f"""
 ### 📐 關鍵位
 
 **壓力位（由近至遠）**
-1. {resistances[0] if len(resistances) > 0 else '無明顯壓力'}
-2. {resistances[1] if len(resistances) > 1 else ''}
-3. {resistances[2] if len(resistances) > 2 else ''}
-4. {resistances[3] if len(resistances) > 3 else ''}
-5. {resistances[4] if len(resistances) > 4 else ''}
+{chr(10).join(resistance_lines) if resistance_lines else "暫無明顯壓力位"}
 
 **支撐位（由近至遠）**
-1. {supports[0] if len(supports) > 0 else '無明顯支撐'}
-2. {supports[1] if len(supports) > 1 else ''}
-3. {supports[2] if len(supports) > 2 else ''}
+{chr(10).join(support_lines) if support_lines else "暫無明顯支撐位"}
 """
 
-    # === 3. 操作參考 ===
-    first_resistance = resistances[0] if resistances else f"近期高點 {recent_high:.2f}"
+    # === 3. 操作參考 (修正價格) ===
+    # 使用正確的支撐位價格
+    first_support = supports_raw[0]['price'] if supports_raw else recent_low
+    second_support = supports_raw[1]['price'] if len(supports_raw) > 1 else first_support * 0.95
+    first_resistance_price = resistances_raw[0]['price'] if resistances_raw else recent_high
     
     report['action_plan'] = f"""
 ### 🎯 操作參考
-*   🟢 **偏多**：價格穩站{recent_low:.2f}支撐之上，伴隨MACD出現黃金交叉、RSI站穩60上方，可偏多布局，第一目標看{first_resistance}，突破後再看下一檔。
-*   🟡 **觀望**：價格在{recent_low:.2f}-{sma20.iloc[-1]:.2f}區間震盪、MACD未出現明確翻多訊號、也未有效跌破{recent_low:.2f}支撐時，建議觀望為主，等待方向明朗。
-*   🔴 **防守**：價格有效跌破{recent_low:.2f}支撐（連續2個交易日收盤在該價之下，或單日大跌3%以上跌破）、且RSI跌破50進入偏空區間時，建議止損防守，避免後續大幅下行風險。
+*   🟢 **偏多**：價格穩站{first_support:.2f}支撐之上，伴隨MACD出現黃金交叉、RSI站穩60上方，可偏多布局，第一目標看{first_resistance_price:.2f}，突破後再看下一檔。
+*   🟡 **觀望**：價格在{second_support:.2f}-{first_resistance_price:.2f}區間震盪、MACD未出現明確翻多訊號、也未有效跌破{first_support:.2f}支撐時，建議觀望為主，等待方向明朗。
+*   🔴 **防守**：價格有效跌破{first_support:.2f}支撐（連續2個交易日收盤在該價之下，或單日大跌3%以上跌破）、且RSI跌破50進入偏空區間時，建議止損防守，避免後續大幅下行風險。
 """
 
     # === 4. 風險評分 ===
@@ -434,7 +430,7 @@ def generate_deep_report(ticker, exchange):
         risk_score -= 10
         
     risk_score = max(0, min(100, risk_score))
-    risk_text = f"評分：{risk_score}分 理由：{'；'.join(risk_reason) if risk_reason else '指標中性'}。短期MACD處於空頭結構，仍有下測支撐的動能，若跌破{recent_low:.2f}關鍵支撐，後續下行空間將打開；但當前價格貼近強支撐位，若守住則有反彈機會，多空不確定性較高，屬於中等偏高風險區間。"
+    risk_text = f"評分：{risk_score}分 理由：{'；'.join(risk_reason) if risk_reason else '指標中性'}。短期MACD處於空頭結構，仍有下測支撐的動能，若跌破{first_support:.2f}關鍵支撐，後續下行空間將打開；但當前價格貼近強支撐位，若守住則有反彈機會，多空不確定性較高，屬於中等偏高風險區間。"
     
     report['risk'] = f"""
 ### ⚠️ 風險 (0-100)
