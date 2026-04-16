@@ -79,7 +79,7 @@ def analyze_industry_structure(sector, industry, gross_margin, roe):
         "downstream": downstream_power
     }
 
-# === 極簡圖表生成 (只保留K線和FIB虛線) ===
+# === 極簡圖表生成 ===
 def generate_clean_chart(df, fib_levels):
     """生成簡潔版 K 線圖 + FIB 水平線"""
     plot_df = df.tail(252) 
@@ -100,15 +100,13 @@ def generate_clean_chart(df, fib_levels):
         increasing_fillcolor='#26a69a', decreasing_fillcolor='#ef5350'
     ))
 
-    # 2. Fibonacci 水平虛線 (只畫線，不畫色塊)
+    # 2. Fibonacci 水平虛線
     fib_ratios = ['0.000', '0.236', '0.382', '0.500', '0.618', '0.786', '1.000']
     
     for ratio in fib_ratios:
         if ratio in fib_levels:
             y_val = fib_levels[ratio]
-            # 添加水平虛線
             fig.add_hline(y=y_val, line_dash="dot", line_color="orange", line_width=1, opacity=0.6)
-            # 在右側添加文字標註
             fig.add_annotation(
                 y=y_val, x=1.02,
                 text=f"{float(ratio)*100:.1f}%",
@@ -142,13 +140,11 @@ def fetch_stock_data(ticker):
     news_data = []
     recommendations = None
     
-    # 1. 獲取歷史數據
     try:
         df = stock.history(period="2y", interval="1d")
         if df.empty: return None, None, None, None, None, "無法獲取歷史數據"
     except Exception as e: return None, None, None, None, None, f"歷史數據獲取失敗：{e}"
     
-    # 2. 獲取基本面數據
     for _ in range(3):
         try:
             info = stock.info
@@ -156,13 +152,11 @@ def fetch_stock_data(ticker):
             time.sleep(1)
         except: time.sleep(1)
     
-    # 3. 獲取新聞
     try:
         time.sleep(0.5)
         news_data = stock.news if hasattr(stock, 'news') and stock.news else []
     except: pass
     
-    # 4. 獲取分析師評級
     try:
         time.sleep(0.5)
         recommendations = stock.recommendations if hasattr(stock, 'recommendations') else None
@@ -272,7 +266,6 @@ def generate_deep_report(ticker, exchange):
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
     signal_line = macd.ewm(span=9, adjust=False).mean()
-    histogram = macd - signal_line
     
     # RSI
     delta = df['Close'].diff()
@@ -297,11 +290,9 @@ def generate_deep_report(ticker, exchange):
         '0.382': recent_low + drop_range * 0.382, '0.236': recent_low + drop_range * 0.236, '0.000': recent_low
     }
     
-    # 生成圖表
     with st.spinner(" 正在生成圖表..."):
         fig = generate_clean_chart(df, fib_levels)
 
-    # 抓取催化劑
     with st.spinner("🔍 正在抓取並驗證催化劑數據..."):
         verified_catalysts = fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df)
 
@@ -331,7 +322,7 @@ def generate_deep_report(ticker, exchange):
     
     report = {}
     
-    # === 1. 技術結構 (新增) ===
+    # === 1. 技術結構 ===
     if current_macd > current_signal and current_macd > 0:
         trend_text = "MACD多頭排列，代表短線動能相對偏強"
     elif current_macd < current_signal and current_macd < 0:
@@ -363,35 +354,62 @@ def generate_deep_report(ticker, exchange):
 *   {ma_text}。
 """
 
-    # === 2. 關鍵位 (新增) ===
-    resistances = []
-    supports = []
+    # === 2. 關鍵位 (修正版) ===
+    # 收集所有FIB關鍵位
+    all_levels = []
+    fib_names = {
+        '0.236': '23.6%回撤位',
+        '0.382': '38.2%回撤位',
+        '0.500': '50.0%回撤位',
+        '0.618': '61.8%回撤位',
+        '0.786': '78.6%回撤位'
+    }
     
-    for k, v in sorted(fib_levels.items(), key=lambda x: x[1]):
-        if k in ['0.000', '1.000', 'high_price', 'low_price']: continue
-        label = f"{float(k)*100:.1f}%回撤位"
-        if v > current_price * 1.01:
-            resistances.append(f"{label} {v:.2f}")
-        elif v < current_price * 0.99:
-            supports.append(f"{label} {v:.2f}")
+    for key, name in fib_names.items():
+        if key in fib_levels:
+            all_levels.append({'name': name, 'price': fib_levels[key]})
+    
+    # 添加高低點
+    all_levels.append({'name': '近期低點', 'price': recent_low})
+    all_levels.append({'name': '近期高點', 'price': recent_high})
+    
+    # 分類：壓力位（比現價高）和支撐位（比現價低）
+    resistances_raw = [lvl for lvl in all_levels if lvl['price'] > current_price * 1.005]
+    supports_raw = [lvl for lvl in all_levels if lvl['price'] < current_price * 0.995]
+    
+    # 壓力位：由近至遠 = 價格由低到高排序
+    resistances_raw.sort(key=lambda x: x['price'])
+    # 支撐位：由近至遠 = 價格由高到低排序
+    supports_raw.sort(key=lambda x: x['price'], reverse=True)
+    
+    # 格式化輸出
+    resistances = []
+    for i, lvl in enumerate(resistances_raw[:5]):  # 最多5個
+        resistances.append(f"{lvl['name']} {lvl['price']:.2f}")
+    
+    supports = []
+    for i, lvl in enumerate(supports_raw[:5]):  # 最多5個
+        suffix = " (當前價格緊鄰該位置)" if i == 0 and abs(supports_raw[0]['price'] - current_price) / current_price < 0.05 else ""
+        supports.append(f"{lvl['name']} {lvl['price']:.2f}{suffix}")
     
     report['key_levels'] = f"""
 ### 📐 關鍵位
 
 **壓力位（由近至遠）**
-1. {resistances[0] if resistances else f'近期高點 {recent_high:.2f}'}
+1. {resistances[0] if len(resistances) > 0 else '無明顯壓力'}
 2. {resistances[1] if len(resistances) > 1 else ''}
 3. {resistances[2] if len(resistances) > 2 else ''}
 4. {resistances[3] if len(resistances) > 3 else ''}
-5. {f'波段前高壓力 {recent_high:.2f}'}
+5. {resistances[4] if len(resistances) > 4 else ''}
 
 **支撐位（由近至遠）**
-1. {supports[0] if supports else f'近期低點 {recent_low:.2f}'} (當前價格緊鄰該位置)
-2. {supports[1] if len(supports) > 1 else f'波段起點 {recent_low:.2f}'}
+1. {supports[0] if len(supports) > 0 else '無明顯支撐'}
+2. {supports[1] if len(supports) > 1 else ''}
+3. {supports[2] if len(supports) > 2 else ''}
 """
 
-    # === 3. 操作參考 (新增) ===
-    first_resistance = resistances[0].split()[-1] if resistances else f"{recent_high:.2f}"
+    # === 3. 操作參考 ===
+    first_resistance = resistances[0] if resistances else f"近期高點 {recent_high:.2f}"
     
     report['action_plan'] = f"""
 ### 🎯 操作參考
@@ -400,7 +418,7 @@ def generate_deep_report(ticker, exchange):
 *   🔴 **防守**：價格有效跌破{recent_low:.2f}支撐（連續2個交易日收盤在該價之下，或單日大跌3%以上跌破）、且RSI跌破50進入偏空區間時，建議止損防守，避免後續大幅下行風險。
 """
 
-    # === 4. 風險評分 (新增) ===
+    # === 4. 風險評分 ===
     risk_score = 50
     risk_reason = []
     if current_macd < 0: 
@@ -576,22 +594,18 @@ if analyze_btn and ticker_input.strip():
                 st.error(f"❌ {error}")
                 st.info("💡 建議：等待 15-30 分鐘後再試，或檢查股票代碼。")
             else:
-                # 顯示報告
                 st.markdown(report['header'])
                 
-                # 新增部分（放在前面）
                 st.info("🔔 **即時信號**")
                 st.markdown(report['tech_structure'])
                 st.markdown(report['key_levels'])
                 
-                # 圖表
                 if fig:
                     st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown(report['action_plan'])
                 st.warning(report['risk'])
                 
-                # 原有部分
                 st.subheader(report['core_data']['標題'])
                 st.dataframe(report['core_data']['表格'], hide_index=True, use_container_width=True)
                 
