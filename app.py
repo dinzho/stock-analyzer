@@ -5,10 +5,11 @@ import datetime
 import math
 import time
 from functools import wraps
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # === 重試裝飾器 ===
 def retry_on_rate_limit(max_retries=3, delay=2):
-    """當遇到速率限制時自動重試"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -37,14 +38,11 @@ with st.sidebar:
     ticker_input = st.text_input("股票代碼", value="NOW", placeholder="例如：NOW, NVDA, TSLA")
     exchange = st.selectbox("交易所", ["NYSE", "NASDAQ", "HKEX"], index=0)
     analyze_btn = st.button("🚀 開始深度分析", type="primary", use_container_width=True)
-    
     st.markdown("---")
     st.info("💡 **提示**：如果出現請求限制錯誤，請等待 15-30 分鐘後再試。")
 
 # === 輔助函數：行業與產業鏈分析 ===
 def analyze_industry_structure(sector, industry, gross_margin, roe):
-    """分析行業屬性、產業鏈位置及議價能力"""
-    
     sector = str(sector).lower() if sector else ""
     industry = str(industry).lower() if industry else ""
     
@@ -53,28 +51,21 @@ def analyze_industry_structure(sector, industry, gross_margin, roe):
     downstream_power = "中等"
     industry_nature = "一般製造/服務業"
     
-    # 科技/軟件行業
     if any(x in sector for x in ['technology', 'communication']) or any(x in industry for x in ['software', 'internet', 'semiconductor']):
         industry_nature = "科技成長型 (高壁壘、高研發)"
         position = "中上游 (核心技術/平台)"
         upstream_power = "中等偏弱 (依賴高端人才/芯片/雲設施)" if gross_margin and gross_margin < 0.6 else "中等 (規模效應)"
         downstream_power = "強勢 (高轉換成本/訂閱制)" if gross_margin and gross_margin > 0.5 else "中等 (競爭激烈)"
-        
-    # 消費品行業
     elif any(x in sector for x in ['consumer cyclical', 'consumer defensive']):
         industry_nature = "消費驅動型 (品牌/渠道为王)"
         position = "下游 (品牌/零售終端)"
         upstream_power = "強勢 (規模壓價權)" if gross_margin and gross_margin > 0.3 else "弱勢 (成本敏感)"
         downstream_power = "弱勢 (價格敏感)" if gross_margin and gross_margin < 0.3 else "強勢 (品牌忠誠)"
-
-    # 工業/製造業
     elif any(x in sector for x in ['industrials', 'basic materials', 'energy']):
         industry_nature = "週期/製造型 (成本/產能驱动)"
         position = "中上游 (原材料/設備)"
         upstream_power = "弱勢 (受制大宗商品)"
         downstream_power = "中等 (取決產能)"
-
-    # 金融業
     elif 'financial' in sector:
         industry_nature = "資金密集型 (槓桿/利率驱动)"
         position = "服務中介"
@@ -88,247 +79,254 @@ def analyze_industry_structure(sector, industry, gross_margin, roe):
         "downstream": downstream_power
     }
 
+# === 圖表生成函數 (新增) ===
+def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
+    """生成 250 日 K 線圖 + FIB 回撤 + 買賣信號"""
+    
+    # 過濾掉最近可能數據不足的部分
+    plot_df = df.tail(252) 
+    if plot_df.empty: return None
+    
+    # 準備數據
+    x = plot_df.index
+    open_ = plot_df['Open']
+    high = plot_df['High']
+    low = plot_df['Low']
+    close = plot_df['Close']
+    
+    # 創建 Figure
+    fig = go.Figure()
+
+    # 1. K 線
+    fig.add_trace(go.Candlestick(
+        x=x, open=open_, high=high, low=low, close=close,
+        name="K 線", increasing_line_color='#26a69a', decreasing_line_color='#ef5350',
+        increasing_fillcolor='#26a69a', decreasing_fillcolor='#ef5350'
+    ))
+
+    # 2. 均線
+    fig.add_trace(go.Scatter(x=x, y=sma20_data, line=dict(color='orange', width=1.5), name='SMA 20'))
+    fig.add_trace(go.Scatter(x=x, y=sma200_data, line=dict(color='blue', width=1.5), name='SMA 200'))
+
+    # 3. Fibonacci 水平線與色帶
+    # 計算範圍的 0% 和 100% 用於繪製色帶 (0 是低點，1 是高點，這里是下跌回撤，所以 0 是低點)
+    # 但 yfinance 的數據順序是時間序列，我們用價格高低點
+    high_price = fib_levels.get('high_price', high.max())
+    low_price = fib_levels.get('low_price', low.min())
+    
+    # 繪製色帶 (FIB 區域)
+    fib_keys = ['0.000', '0.236', '0.382', '0.500', '0.618', '0.786', '1.000']
+    colors = ['rgba(0,255,0,0.1)', 'rgba(0,255,0,0.1)', 'rgba(255,255,0,0.1)', 'rgba(255,165,0,0.1)', 'rgba(255,0,0,0.1)', 'rgba(255,0,0,0.1)', 'rgba(255,0,0,0.1)']
+    
+    for i in range(len(fib_keys)-1):
+        key_curr = fib_keys[i]
+        key_next = fib_keys[i+1]
+        y0 = float(fib_levels.get(key_curr, low_price))
+        y1 = float(fib_levels.get(key_next, high_price))
+        
+        fig.add_shape(
+            type="rect", x0=x[0], x1=x[-1], y0=y0, y1=y1,
+            fillcolor=colors[i], line=dict(width=0), layer='below'
+        )
+        
+        # 添加文字標記
+        fig.add_annotation(
+            x=x[0], y=y0, text=f"Fib {key_curr}",
+            showarrow=False, font=dict(size=10, color="gray"),
+            xanchor="left", yanchor="top"
+        )
+
+    # 4. 買賣信號 (Signal)
+    # 邏輯：價格上穿 SMA20 = 買入 (綠三角)，下穿 = 賣出 (紅三角)
+    buy_signals = []
+    sell_signals = []
+    buy_dates = []
+    sell_dates = []
+
+    for i in range(1, len(close)):
+        prev_close = close.iloc[i-1]
+        curr_close = close.iloc[i]
+        curr_sma20 = sma20_data.iloc[i]
+        # 確保 SMA 有值
+        if pd.isna(curr_sma20): continue
+
+        # 買入：前一天在均線下，今天在上 (或者今天剛好在均線上且漲)
+        if prev_close < sma20_data.iloc[i-1] and curr_close > curr_sma20:
+            buy_signals.append(curr_close)
+            buy_dates.append(x[i])
+        # 賣出：前一天在均線上，今天在下
+        elif prev_close > sma20_data.iloc[i-1] and curr_close < curr_sma20:
+            sell_signals.append(curr_close)
+            sell_dates.append(x[i])
+
+    if buy_dates:
+        fig.add_trace(go.Scatter(x=buy_dates, y=buy_signals, mode='markers', 
+                                 marker=dict(symbol='triangle-up', size=12, color='green'), 
+                                 name='買入信號'))
+    if sell_dates:
+        fig.add_trace(go.Scatter(x=sell_dates, y=sell_signals, mode='markers', 
+                                 marker=dict(symbol='triangle-down', size=12, color='red'), 
+                                 name='賣出信號'))
+
+    # 佈局設置
+    fig.update_layout(
+        xaxis_rangeslider_visible=False,
+        height=600,
+        margin=dict(l=20, r=20, t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode='x unified'
+    )
+    fig.update_xaxes(title_text="日期", rangeslider_visible=False)
+    fig.update_yaxes(title_text="價格")
+    
+    return fig
+
 # === 數據獲取函數 ===
 @retry_on_rate_limit(max_retries=3, delay=3)
 def fetch_stock_data(ticker):
-    """獲取股票所有數據"""
-    
     stock = yf.Ticker(ticker)
-    
-    # 1. 歷史價格數據
     try:
+        # 獲取 2 年數據以計算 SMA200
         df = stock.history(period="2y", interval="1d")
-        if df.empty:
-            return None, None, None, None, None, "無法獲取歷史數據"
-    except Exception as e:
-        return None, None, None, None, None, f"歷史數據獲取失敗：{e}"
+        if df.empty: return None, None, None, None, None, "無法獲取歷史數據"
+    except Exception as e: return None, None, None, None, None, f"歷史數據獲取失敗：{e}"
     
-    # 2. 基本面數據
     info = {}
     try:
         time.sleep(1)
         info = stock.info
-    except Exception as e:
-        st.warning(f"⚠️ 基本面數據部分缺失：{e}")
+    except: pass
     
-    # 3. 新聞數據
     news_data = []
     try:
         time.sleep(1)
         news_data = stock.news if hasattr(stock, 'news') else []
-    except:
-        pass
+    except: pass
     
-    # 4. 分析師推薦
     recommendations = None
     try:
         time.sleep(1)
         recommendations = stock.recommendations if hasattr(stock, 'recommendations') else None
-    except:
-        pass
-    
-    # 5. 財報日曆
-    calendar = None
-    try:
-        time.sleep(1)
-        calendar = stock.calendar if hasattr(stock, 'calendar') else None
-    except:
-        pass
+    except: pass
     
     return stock, df, info, news_data, recommendations, None
 
 # === 催化劑數據驗證函數 ===
 def fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, df):
-    """抓取並多方驗證催化劑數據"""
-    
     verified_catalysts = {
-        'upcoming_events': [],
-        'recent_news': [],
-        'analyst_actions': [],
-        'product_launches': [],
-        'financial_events': [],
-        'risks': []
+        'upcoming_events': [], 'recent_news': [], 'analyst_actions': [],
+        'product_launches': [], 'financial_events': [], 'risks': []
     }
-    
     current_date = datetime.datetime.now()
     
-    # === 1. 驗證並提取新聞催化劑 ===
-    if news_data:
+    if news_
         for news in news_data[:10]:
             try:
                 pub_date = news.get('providerPublishTime')
                 if pub_date:
                     news_date = datetime.datetime.fromtimestamp(pub_date)
                     days_ago = (current_date - news_date).days
-                    
                     if days_ago <= 30:
                         title = news.get('title', '')
                         publisher = news.get('publisher', '')
-                        link = news.get('link', '')
-                        
                         catalyst_type = "一般"
-                        keywords_positive = ['beat', 'surge', 'growth', 'launch', 'partnership', 'upgrade', 'expand', 'win', 'AI']
-                        keywords_negative = ['miss', 'decline', 'layoff', 'lawsuit', 'investigation', 'downgrade', 'risk']
-                        keywords_earnings = ['earnings', 'quarter', 'revenue', 'profit', 'fiscal']
-                        
-                        title_lower = title.lower()
-                        
-                        if any(kw in title_lower for kw in keywords_earnings):
-                            catalyst_type = "財報相關"
-                        elif any(kw in title_lower for kw in keywords_positive):
-                            catalyst_type = "正面催化"
-                        elif any(kw in title_lower for kw in keywords_negative):
-                            catalyst_type = "負面風險"
+                        k_pos = ['beat', 'surge', 'growth', 'launch', 'partnership', 'upgrade', 'AI']
+                        k_neg = ['miss', 'decline', 'layoff', 'lawsuit', 'downgrade', 'risk']
+                        k_earn = ['earnings', 'quarter', 'revenue', 'profit']
+                        tl = title.lower()
+                        if any(k in tl for k in k_earn): catalyst_type = "財報相關"
+                        elif any(k in tl for k in k_pos): catalyst_type = "正面催化"
+                        elif any(k in tl for k in k_neg): catalyst_type = "負面風險"
                         
                         verified_catalysts['recent_news'].append({
-                            'date': news_date.strftime('%Y-%m-%d'),
-                            'title': title,
-                            'publisher': publisher,
-                            'type': catalyst_type,
-                            'link': link,
-                            'days_ago': days_ago
+                            'date': news_date.strftime('%Y-%m-%d'), 'title': title,
+                            'publisher': publisher, 'type': catalyst_type, 'days_ago': days_ago
                         })
-            except:
-                continue
-    
-    # === 2. 驗證分析師行為 ===
+            except: continue
+            
     if recommendations is not None and not recommendations.empty:
         try:
-            recent_recs = recommendations.head(5)
-            
-            for idx, rec in recent_recs.iterrows():
-                try:
-                    firm = rec.get('Firm', 'Unknown')
-                    to_grade = rec.get('To Grade', '')
-                    action = rec.get('Action', '')
-                    
-                    if to_grade or action:
-                        verified_catalysts['analyst_actions'].append({
-                            'firm': firm,
-                            'action': action,
-                            'rating': to_grade,
-                            'date': idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
-                        })
-                except:
-                    continue
-        except:
-            pass
-    
-    # === 3. 財報與重大事件 ===
+            for idx, rec in recommendations.head(5).iterrows():
+                firm = rec.get('Firm', 'Unknown')
+                action = rec.get('Action', '')
+                to_grade = rec.get('To Grade', '')
+                if action or to_grade:
+                    verified_catalysts['analyst_actions'].append({
+                        'firm': firm, 'action': action, 'rating': to_grade,
+                        'date': idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+                    })
+        except: pass
+
     next_earnings = info.get('earningsDate')
     if next_earnings:
         try:
-            if isinstance(next_earnings, list):
-                earnings_date = next_earnings[0]
-            else:
-                earnings_date = next_earnings
-            
-            if hasattr(earnings_date, 'strftime'):
-                verified_catalysts['upcoming_events'].append({
-                    'type': '財報發布',
-                    'date': earnings_date.strftime('%Y-%m-%d'),
-                    'importance': '高'
-                })
-        except:
-            pass
+            d = next_earnings[0] if isinstance(next_earnings, list) else next_earnings
+            if hasattr(d, 'strftime'):
+                verified_catalysts['upcoming_events'].append({'type': '財報發布', 'date': d.strftime('%Y-%m-%d'), 'importance': '高'})
+        except: pass
+
+    prod_k = ['launch', 'release', 'new product']
+    part_k = ['partnership', 'collaboration', 'deal']
+    for item in verified_catalysts['recent_news']:
+        tl = item['title'].lower()
+        if any(k in tl for k in prod_k): verified_catalysts['product_launches'].append(item)
+        if any(k in tl for k in part_k): verified_catalysts['financial_events'].append(item)
+
+    if info.get('profitMargins', 0) < 0.1: verified_catalysts['risks'].append('利潤率偏低 (<10%)')
+    if info.get('debtToEquity', 0) > 100: verified_catalysts['risks'].append('負債比率較高')
+    if info.get('revenueGrowth', 0) < 0.05: verified_catalysts['risks'].append('營收增長放緩')
     
-    # === 4. 產品/業務催化劑 ===
-    product_keywords = ['launch', 'release', 'new product', 'introduction', 'unveil', 'beta']
-    partnership_keywords = ['partnership', 'collaboration', 'deal', 'agreement', 'joint venture']
-    
-    for news_item in verified_catalysts['recent_news']:
-        title_lower = news_item['title'].lower()
-        
-        if any(kw in title_lower for kw in product_keywords):
-            verified_catalysts['product_launches'].append({
-                'title': news_item['title'],
-                'date': news_item['date'],
-                'source': news_item['publisher']
-            })
-        
-        if any(kw in title_lower for kw in partnership_keywords):
-            verified_catalysts['financial_events'].append({
-                'title': news_item['title'],
-                'date': news_item['date'],
-                'type': '合作/併購',
-                'source': news_item['publisher']
-            })
-    
-    # === 5. 風險因素 ===
-    if info.get('profitMargins', 0) < 0.1:
-        verified_catalysts['risks'].append('利潤率偏低 (<10%)')
-    
-    if info.get('debtToEquity', 0) > 100:
-        verified_catalysts['risks'].append('負債比率較高')
-    
-    if info.get('revenueGrowth', 0) < 0.05:
-        verified_catalysts['risks'].append('營收增長放緩 (<5%)')
-    
-    risk_keywords = ['regulatory', 'investigation', 'lawsuit', 'recall', 'security breach']
-    for news_item in verified_catalysts['recent_news']:
-        if news_item['type'] == '負面風險':
-            verified_catalysts['risks'].append({
-                'title': news_item['title'],
-                'date': news_item['date']
-            })
-    
-    # === 6. 目標價驗證 ===
-    target_price_data = {}
-    
-    target_high = info.get('targetHighPrice')
-    target_low = info.get('targetLowPrice')
     target_mean = info.get('targetMeanPrice')
     current_price = df['Close'].iloc[-1]
-    
+    verified_catalysts['target_price'] = {}
     if target_mean and current_price:
-        upside = ((target_mean - current_price) / current_price) * 100
-        
-        target_price_data = {
-            'mean': target_mean,
-            'high': target_high,
-            'low': target_low,
-            'current': current_price,
-            'upside': upside,
-            'verified': True if abs(upside) < 100 else False
+        up = ((target_mean - current_price)/current_price)*100
+        verified_catalysts['target_price'] = {
+            'mean': target_mean, 'high': info.get('targetHighPrice'), 'low': info.get('targetLowPrice'),
+            'current': current_price, 'upside': up, 'verified': abs(up) < 100
         }
-    
-    verified_catalysts['target_price'] = target_price_data
-    
+        
     return verified_catalysts
 
 # === 核心報告生成函數 ===
 def generate_deep_report(ticker, exchange):
-    """生成深度分析報告"""
-    
     stock, df, info, news_data, recommendations, error = fetch_stock_data(ticker)
+    if error: return None, None, error
     
-    if error:
-        return None, error
-    
+    with st.spinner(" 正在生成圖表..."):
+        current_price = df['Close'].iloc[-1]
+        recent_high = df['High'].max()
+        recent_low = df['Low'].min()
+        
+        # 計算均線
+        sma20 = df['Close'].rolling(20).mean()
+        sma200 = df['Close'].rolling(200).mean()
+        
+        # 計算 FIB
+        drop_range = recent_high - recent_low
+        fib_levels = {
+            'high_price': recent_high, 'low_price': recent_low,
+            '1.000': recent_high, '0.786': recent_low + drop_range * 0.214,
+            '0.618': recent_low + drop_range * 0.618, '0.500': recent_low + drop_range * 0.5,
+            '0.382': recent_low + drop_range * 0.382, '0.236': recent_low + drop_range * 0.236, '0.000': recent_low
+        }
+        
+        fig = generate_kline_chart(df, fib_levels, sma20, sma200)
+
     with st.spinner("🔍 正在抓取並驗證催化劑數據..."):
         verified_catalysts = fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, df)
-    
-    # === 基礎技術指標 ===
-    current_price = df['Close'].iloc[-1]
+
     prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
     price_change_pct = ((current_price - prev_close) / prev_close) * 100
     
     high_52w = df['High'].rolling(252).max().iloc[-1]
     low_52w = df['Low'].rolling(252).min().iloc[-1]
-    recent_high = df['High'].max()
-    recent_low = df['Low'].min()
     
-    sma20 = df['Close'].rolling(20).mean().iloc[-1]
-    sma50 = df['Close'].rolling(50).mean().iloc[-1]
-    sma200 = df['Close'].rolling(200).mean().iloc[-1]
-    
-    # === 基本面數據 ===
     def safe_get(key, default=None):
         try:
             val = info.get(key)
             return val if val is not None and not pd.isna(val) else default
-        except:
-            return default
+        except: return default
 
     sector = safe_get('sector')
     industry = safe_get('industry')
@@ -339,19 +337,16 @@ def generate_deep_report(ticker, exchange):
     
     industry_analysis = analyze_industry_structure(sector, industry, gross_margin, roe)
     
-    # === 構建報告 ===
     today_str = datetime.datetime.now().strftime('%Y-%m-%d')
     last_trade_date = df.index[-1].strftime('%Y-%m-%d')
     
     report = {}
     
-    # Header
     report['header'] = f"""
 ### 📊 {safe_get('longName', ticker.upper())} ({ticker}:{exchange}) 完整深度分析報告
 > **📅 數據基準**：{last_trade_date} 收盤 | **💰 現價**：${current_price:.2f} ({price_change_pct:+.2f}%)
 """
 
-    # 1. 核心數據
     report['core_data'] = {
         "標題": "📈 1. 核心數據概覽",
         "表格": pd.DataFrame({
@@ -365,25 +360,21 @@ def generate_deep_report(ticker, exchange):
         })
     }
 
-    # 2. 技術面
     report['wave'] = f"""
 ### 🌊 2. 技術趨勢
 *   **波段**：高點 ${recent_high:.2f} → 低點 ${recent_low:.2f}
-*   **均線**：現價 ${current_price:.2f} vs SMA20 ${sma20:.2f} | SMA200 ${sma200:.2f}
-*   **狀態**：{"✅ 多頭排列" if current_price > sma20 > sma50 else "⚠️ 空頭排列/震盪"}
+*   **均線**：現價 ${current_price:.2f} vs SMA20 ${sma20.iloc[-1]:.2f}
+*   **狀態**：{"✅ 多頭排列" if current_price > sma20.iloc[-1] > sma200.iloc[-1] else "⚠️ 空頭排列/震盪"}
 """
 
-    # 3. 黃金分割
-    drop_range = recent_high - recent_low
-    fib_382 = recent_low + drop_range * 0.382
+    fib_382 = fib_levels['0.382']
     report['fib'] = f"""
 ### 📐 3. 關鍵阻力 (Fibonacci)
 *   **0.382 黃金坑**: ${fib_382:.2f}
-*   **0.500 中軸**: ${recent_low + drop_range * 0.5:.2f}
+*   **0.500 中軸**: ${fib_levels['0.500']:.2f}
 *   **當前**: {"✅ 突破 0.382" if current_price > fib_382 else "⚠️ 受壓於 0.382"}
 """
 
-    # 5. 基本面
     bargaining_summary = ""
     if industry_analysis['downstream'] == "強勢" and industry_analysis['upstream'] == "強勢":
         bargaining_summary = "**雙向強勢 (产业链霸主)**：對上下游均有極強話語權。"
@@ -415,7 +406,6 @@ def generate_deep_report(ticker, exchange):
 | **PE估值** | {f"{pe_ratio:.1f}x" if pe_ratio else "N/A"} | {"💸 高估值" if pe_ratio and pe_ratio > 40 else "⚖️ 合理" if pe_ratio and 15 < pe_ratio < 40 else "💰 低估值" if pe_ratio and pe_ratio < 15 else "N/A"} |
 """
 
-    # === 6. 未來預期與催化劑 (已驗證版) ===
     catalysts_text = f"""
 ### 🔮 6. 未來預期與催化劑 (Catalysts)
 *📅 數據抓取時間：{today_str} | 來源：Yahoo Finance / 官方公告*
@@ -423,31 +413,26 @@ def generate_deep_report(ticker, exchange):
 #### ✅ 已驗證的正面催化劑
 """
     
-    # 添加財報事件
     if verified_catalysts['upcoming_events']:
         catalysts_text += "\n**📅 即將發生的重大事件：**\n"
         for event in verified_catalysts['upcoming_events']:
             catalysts_text += f"- **{event['date']}** | {event['type']} | 重要性：{event['importance']}\n"
     
-    # 添加分析師評級
     if verified_catalysts['analyst_actions']:
         catalysts_text += "\n**📊 近期分析師評級調整：**\n"
         for action in verified_catalysts['analyst_actions'][:5]:
             catalysts_text += f"- **{action['firm']}** ({action['date']}): {action['action']} → {action['rating']}\n"
     
-    # 添加產品/業務催化劑
     if verified_catalysts['product_launches']:
         catalysts_text += "\n**🚀 產品/業務進展：**\n"
         for product in verified_catalysts['product_launches'][:3]:
             catalysts_text += f"- **{product['date']}**: {product['title']}\n"
     
-    # 添加合作/併購
     if verified_catalysts['financial_events']:
         catalysts_text += "\n**🤝 合作/戰略事件：**\n"
         for event in verified_catalysts['financial_events'][:3]:
             catalysts_text += f"- **{event['date']}**: {event['title']}\n"
     
-    # 添加目標價信息 (已驗證)
     if verified_catalysts['target_price'] and verified_catalysts['target_price'].get('verified'):
         tp = verified_catalysts['target_price']
         catalysts_text += f"""
@@ -457,43 +442,35 @@ def generate_deep_report(ticker, exchange):
 - 當前價：${tp['current']:.2f}
 """
     
-    # 添加重要新聞
     recent_positive = [n for n in verified_catalysts['recent_news'] if n['type'] == '正面催化']
     if recent_positive:
         catalysts_text += "\n**📰 近期重要正面新聞：**\n"
         for news in recent_positive[:3]:
             catalysts_text += f"- **{news['date']}** ({news['publisher']}): {news['title'][:100]}...\n"
     
-    # 風險因素
     catalysts_text += "\n#### ⚠️ 已識別的風險因素\n"
-    
     if verified_catalysts['risks']:
         for risk in verified_catalysts['risks'][:5]:
-            if isinstance(risk, dict):
-                catalysts_text += f"- **{risk['date']}**: {risk['title'][:100]}...\n"
-            else:
-                catalysts_text += f"- {risk}\n"
+            if isinstance(risk, dict): catalysts_text += f"- **{risk['date']}**: {risk['title'][:100]}...\n"
+            else: catalysts_text += f"- {risk}\n"
     else:
         catalysts_text += "- 暫無重大風險信號\n"
 
     report['catalysts'] = catalysts_text
 
-    # 7. 情緒
     report['sentiment'] = f"""
 ### 🧠 7. 市場情緒
-*   **技術面**：{"多頭" if current_price > sma20 else "空頭"}
+*   **技術面**：{"多頭" if current_price > sma20.iloc[-1] else "空頭"}
 *   **資金面**：{"放量" if df['Volume'].iloc[-1] > df['Volume'].rolling(10).mean().iloc[-1] else "縮量"}
 *   **結論**：{"反彈初期" if current_price > recent_low * 1.05 else "尋底過程"}
 """
 
-    # 8. 策略
     report['strategy'] = f"""
 ### 🎯 8. 交易策略
-*   **短線**：支撐 ${sma20:.2f} / 阻力 ${fib_382:.2f}
+*   **短線**：支撐 ${sma20.iloc[-1]:.2f} / 阻力 ${fib_382:.2f}
 *   **中長線**：{"✅ 逢低吸納" if (roe and roe > 0.15) or (industry_analysis['downstream'] == "強勢") else "⚠️ 波段操作"}
 """
 
-    # 9. 數據驗證說明 (移到最後)
     report['verification_note'] = f"""
 ---
 ### 📋 數據驗證說明
@@ -510,7 +487,7 @@ def generate_deep_report(ticker, exchange):
 ⚠️ **免責聲明**：本分析僅供參考，不構成投資建議。股市有風險，入市需謹慎。
 """
 
-    return report, None
+    return report, fig, None
 
 # === 主程序 ===
 if analyze_btn and ticker_input.strip():
@@ -518,14 +495,18 @@ if analyze_btn and ticker_input.strip():
     
     with st.spinner(f"🔍 正在深度分析 {ticker}..."):
         try:
-            report, error = generate_deep_report(ticker, exchange)
+            report, fig, error = generate_deep_report(ticker, exchange)
             
             if error:
                 st.error(f"❌ {error}")
                 st.info("💡 建議：等待 15-30 分鐘後再試，或檢查股票代碼。")
             else:
-                # 顯示報告
                 st.markdown(report['header'])
+                
+                # 顯示圖表
+                if fig:
+                    st.subheader("📊 技術圖表：K 線 + 均線 + FIB 回撤帶")
+                    st.plotly_chart(fig, use_container_width=True)
                 
                 st.subheader(report['core_data']['標題'])
                 st.dataframe(report['core_data']['表格'], hide_index=True, use_container_width=True)
@@ -536,8 +517,6 @@ if analyze_btn and ticker_input.strip():
                 st.markdown(report['catalysts'])
                 st.markdown(report['sentiment'])
                 st.markdown(report['strategy'])
-                
-                # 最後顯示數據驗證說明
                 st.markdown(report['verification_note'])
                 
         except Exception as e:
