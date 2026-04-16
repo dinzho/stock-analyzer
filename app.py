@@ -2,12 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import datetime
-import math
 import time
 from functools import wraps
 import plotly.graph_objects as go
 
-# === 重試裝飾器 ===
+# === 重試裝飾器 (針對主要數據獲取) ===
 def retry_on_rate_limit(max_retries=3, delay=2):
     def decorator(func):
         @wraps(func)
@@ -161,45 +160,53 @@ def generate_kline_chart(df, fib_levels, sma20_data, sma200_data):
     
     return fig
 
-# === 數據獲取函數 ===
+# === 數據獲取函數 (增強版：針對 Info/News 獨立重試) ===
 @retry_on_rate_limit(max_retries=3, delay=3)
 def fetch_stock_data(ticker):
     stock = yf.Ticker(ticker)
+    df = None
+    info = {}
+    news_data = []
+    recommendations = None
+    
+    # 1. 獲取歷史數據 (核心，必須成功)
     try:
         df = stock.history(period="2y", interval="1d")
         if df.empty: return None, None, None, None, None, "無法獲取歷史數據"
     except Exception as e: return None, None, None, None, None, f"歷史數據獲取失敗：{e}"
     
-    info = {}
+    # 2. 獲取基本面數據 (Info) - 容易失敗，加入重試
+    for _ in range(3):
+        try:
+            info = stock.info
+            if info and 'sector' in info: break # 確保獲取到關鍵字段
+            time.sleep(1)
+        except: time.sleep(1)
+    
+    # 3. 獲取新聞
     try:
-        time.sleep(1)
-        info = stock.info
+        time.sleep(0.5)
+        news_data = stock.news if hasattr(stock, 'news') and stock.news else []
     except: pass
     
-    news_data = []
+    # 4. 獲取分析師評級
     try:
-        time.sleep(1)
-        news_data = stock.news if hasattr(stock, 'news') else []
-    except: pass
-    
-    recommendations = None
-    try:
-        time.sleep(1)
+        time.sleep(0.5)
         recommendations = stock.recommendations if hasattr(stock, 'recommendations') else None
     except: pass
     
     return stock, df, info, news_data, recommendations, None
 
 # === 催化劑數據驗證函數 ===
-def fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, df):
+def fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df):
     verified_catalysts = {
         'upcoming_events': [], 'recent_news': [], 'analyst_actions': [],
-        'product_launches': [], 'financial_events': [], 'risks': []
+        'product_launches': [], 'financial_events': [], 'risks': [], 'target_price': {}
     }
     current_date = datetime.datetime.now()
     
-    # ✅ 修正了這裡的語法錯誤
-    if news_data:
+    # ✅ 修正：確保 news_data 是列表且不為空
+    if news_data and isinstance(news_data, list):
         for news in news_data[:10]:
             try:
                 pub_date = news.get('providerPublishTime')
@@ -237,13 +244,15 @@ def fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, 
                     })
         except: pass
 
-    next_earnings = info.get('earningsDate')
-    if next_earnings:
-        try:
-            d = next_earnings[0] if isinstance(next_earnings, list) else next_earnings
-            if hasattr(d, 'strftime'):
-                verified_catalysts['upcoming_events'].append({'type': '財報發布', 'date': d.strftime('%Y-%m-%d'), 'importance': '高'})
-        except: pass
+    # 使用 info 獲取財報日，如果 info 為空則跳過
+    if info:
+        next_earnings = info.get('earningsDate')
+        if next_earnings:
+            try:
+                d = next_earnings[0] if isinstance(next_earnings, list) else next_earnings
+                if hasattr(d, 'strftime'):
+                    verified_catalysts['upcoming_events'].append({'type': '財報發布', 'date': d.strftime('%Y-%m-%d'), 'importance': '高'})
+            except: pass
 
     prod_k = ['launch', 'release', 'new product']
     part_k = ['partnership', 'collaboration', 'deal']
@@ -252,19 +261,21 @@ def fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, 
         if any(k in tl for k in prod_k): verified_catalysts['product_launches'].append(item)
         if any(k in tl for k in part_k): verified_catalysts['financial_events'].append(item)
 
-    if info.get('profitMargins', 0) < 0.1: verified_catalysts['risks'].append('利潤率偏低 (<10%)')
-    if info.get('debtToEquity', 0) > 100: verified_catalysts['risks'].append('負債比率較高')
-    if info.get('revenueGrowth', 0) < 0.05: verified_catalysts['risks'].append('營收增長放緩')
+    if info:
+        if info.get('profitMargins', 0) < 0.1: verified_catalysts['risks'].append('利潤率偏低 (<10%)')
+        if info.get('debtToEquity', 0) > 100: verified_catalysts['risks'].append('負債比率較高')
+        if info.get('revenueGrowth', 0) < 0.05: verified_catalysts['risks'].append('營收增長放緩')
     
-    target_mean = info.get('targetMeanPrice')
-    current_price = df['Close'].iloc[-1]
-    verified_catalysts['target_price'] = {}
-    if target_mean and current_price:
-        up = ((target_mean - current_price)/current_price)*100
-        verified_catalysts['target_price'] = {
-            'mean': target_mean, 'high': info.get('targetHighPrice'), 'low': info.get('targetLowPrice'),
-            'current': current_price, 'upside': up, 'verified': abs(up) < 100
-        }
+    # 目標價驗證
+    if info:
+        target_mean = info.get('targetMeanPrice')
+        current_price = df['Close'].iloc[-1]
+        if target_mean and current_price:
+            up = ((target_mean - current_price)/current_price)*100
+            verified_catalysts['target_price'] = {
+                'mean': target_mean, 'high': info.get('targetHighPrice'), 'low': info.get('targetLowPrice'),
+                'current': current_price, 'upside': up, 'verified': abs(up) < 100
+            }
         
     return verified_catalysts
 
@@ -273,6 +284,10 @@ def generate_deep_report(ticker, exchange):
     stock, df, info, news_data, recommendations, error = fetch_stock_data(ticker)
     if error: return None, None, error
     
+    # 如果 info 為空，發出警告但不中斷
+    if not info:
+        st.warning("⚠️ 基本面數據 (Info) 獲取受限，部分報表數據將顯示為 N/A")
+
     with st.spinner(" 正在生成圖表..."):
         current_price = df['Close'].iloc[-1]
         recent_high = df['High'].max()
@@ -292,7 +307,7 @@ def generate_deep_report(ticker, exchange):
         fig = generate_kline_chart(df, fib_levels, sma20, sma200)
 
     with st.spinner("🔍 正在抓取並驗證催化劑數據..."):
-        verified_catalysts = fetch_and_verify_catalysts(ticker, stock, news_data, recommendations, info, df)
+        verified_catalysts = fetch_and_verify_catalysts(ticker, news_data, recommendations, info, df)
 
     prev_close = df['Close'].iloc[-2] if len(df) > 1 else current_price
     price_change_pct = ((current_price - prev_close) / prev_close) * 100
@@ -302,6 +317,7 @@ def generate_deep_report(ticker, exchange):
     
     def safe_get(key, default=None):
         try:
+            if not info: return default
             val = info.get(key)
             return val if val is not None and not pd.isna(val) else default
         except: return default
@@ -312,6 +328,8 @@ def generate_deep_report(ticker, exchange):
     roe = safe_get('returnOnEquity')
     pe_ratio = safe_get('trailingPE')
     revenue_growth = safe_get('revenueGrowth')
+    market_cap = safe_get('marketCap')
+    beta = safe_get('beta', 1)
     
     industry_analysis = analyze_industry_structure(sector, industry, gross_margin, roe)
     
@@ -331,9 +349,9 @@ def generate_deep_report(ticker, exchange):
             "指標": ["52周範圍", "市值", "PE (TTM)", "Beta"],
             "數值": [
                 f"${low_52w:.1f} - ${high_52w:.1f}",
-                f"${safe_get('marketCap', 0)/1e9:.2f}B" if safe_get('marketCap') else "N/A",
+                f"${market_cap/1e9:.2f}B" if market_cap else "N/A",
                 f"{pe_ratio:.2f}" if pe_ratio else "N/A",
-                f"{safe_get('beta', 1):.2f}"
+                f"{beta:.2f}"
             ]
         })
     }
@@ -395,11 +413,15 @@ def generate_deep_report(ticker, exchange):
         catalysts_text += "\n**📅 即將發生的重大事件：**\n"
         for event in verified_catalysts['upcoming_events']:
             catalysts_text += f"- **{event['date']}** | {event['type']} | 重要性：{event['importance']}\n"
+    elif not info:
+        catalysts_text += "\n*⚠️ 因數據受限，暫無財報事件數據*\n"
     
     if verified_catalysts['analyst_actions']:
         catalysts_text += "\n**📊 近期分析師評級調整：**\n"
         for action in verified_catalysts['analyst_actions'][:5]:
             catalysts_text += f"- **{action['firm']}** ({action['date']}): {action['action']} → {action['rating']}\n"
+    elif not info:
+        catalysts_text += "\n*⚠️ 因數據受限，暫無分析師評級數據*\n"
     
     if verified_catalysts['product_launches']:
         catalysts_text += "\n**🚀 產品/業務進展：**\n"
@@ -419,12 +441,16 @@ def generate_deep_report(ticker, exchange):
 - 區間：${tp['low']:.2f} - ${tp['high']:.2f}
 - 當前價：${tp['current']:.2f}
 """
+    elif not info:
+        catalysts_text += "\n*⚠️ 因數據受限，暫無目標價數據*\n"
     
     recent_positive = [n for n in verified_catalysts['recent_news'] if n['type'] == '正面催化']
     if recent_positive:
         catalysts_text += "\n**📰 近期重要正面新聞：**\n"
         for news in recent_positive[:3]:
             catalysts_text += f"- **{news['date']}** ({news['publisher']}): {news['title'][:100]}...\n"
+    elif not news_data:
+        catalysts_text += "\n*⚠️ 因數據受限，暫無新聞數據*\n"
     
     catalysts_text += "\n#### ⚠️ 已識別的風險因素\n"
     if verified_catalysts['risks']:
